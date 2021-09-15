@@ -1,0 +1,14 @@
+name: time_series
+title: time_series
+username:
+account: leotimmermans
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 4554456
+bundleId: 5036716
+url: https://leotimmermans.shinyapps.io/time_series/
+when: 1631727030.42038
+lastSyncTime: 1631727030.42038
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: modules/module_pick_dataset.R|modules/module_transformations.R|00_analysis
