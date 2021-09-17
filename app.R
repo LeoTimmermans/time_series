@@ -164,17 +164,18 @@ description_tbl <-
     tribble(
         ~ dataset_id, ~ desc,
         "cbs_pump_prices_tbl", "Daily prices for different fuel types. Data source: https://opendata.cbs.nl/statline/#/CBS/en/dataset/80416ENG.",
-        "cbs_housing_prices_tbl", "Housing prices in the Netherlands. Quarterly average housing prices per type. Date source: https://opendata.cbs.nl/statline/#/CBS/en/dataset/83910ENG.",
+        "dow_tbl", "(Adjusted) stock prices for DOW-Jones stocks for 6 highest trading value (adjusted stock price * volume) stocks. Showing only last adjusted stock price per week to keep dataset small and have a weekly dataset.",
         "cbs_air_passengers_tbl", "Montly total passenger data (departures, arrivals & transit) for all Dutch Airports. Date source: https://opendata.cbs.nl/statline/#/CBS/en/dataset/37478ENG.",
-        "dow_tbl", "(Adjusted) stock prices for DOW-Jones stocks."
+        "cbs_housing_prices_tbl", "Housing prices in the Netherlands. Quarterly average housing prices per type. Date source: https://opendata.cbs.nl/statline/#/CBS/en/dataset/83910ENG."
     )
 
 # COMPOSE DATASETS TIBBLE----
 datasets_tbl <- list(
     cbs_pump_prices_tbl    = cbs_pump_prices_tbl,
-    cbs_housing_prices_tbl = cbs_housing_prices_tbl,
+    dow_tbl                = dow_tbl,
     cbs_air_passengers_tbl = cbs_air_passengers_tbl,
-    dow_tbl                = dow_tbl) %>%
+    cbs_housing_prices_tbl = cbs_housing_prices_tbl
+    ) %>%
     enframe(
         name  = "dataset_id",
         value = "data"
@@ -240,16 +241,16 @@ ui <- navbarPage(
                            choices  = choices_vec,
                            selected = "cbs_pump_prices_tbl",
                            multiple = FALSE
-                       ),
-                       
-                       pickerInput(
-                           inputId  = "sel_vars_load",
-                           label    = "Select time series to explore",
-                           choices  = names(cbs_pump_prices_tbl)[!names(cbs_pump_prices_tbl) %in% c("date")],
-                           selected = names(cbs_pump_prices_tbl)[!names(cbs_pump_prices_tbl) %in% c("date")],
-                           multiple = TRUE,
-                           options = list(`actions-box` = TRUE)
                        )
+                       # ,
+                       # pickerInput(
+                       #     inputId  = "sel_vars_load",
+                       #     label    = "Select time series to explore",
+                       #     choices  = names(cbs_pump_prices_tbl)[!names(cbs_pump_prices_tbl) %in% c("date")],
+                       #     selected = names(cbs_pump_prices_tbl)[!names(cbs_pump_prices_tbl) %in% c("date")],
+                       #     multiple = TRUE,
+                       #     options = list(`actions-box` = TRUE)
+                       # )
                    )),
             # 1.2 dataset summary ----
             column(
@@ -339,7 +340,7 @@ ui <- navbarPage(
              # load message
              load_message(),
              conditionalPanel(condition="$('html').hasClass('shiny-busy')",
-                              tags$div("Running & selecting forecasts... This will take a few minutes.",id="loadmessage")),
+                              tags$div("Running forecasts & creating ensembles ... This will take a few minutes.",id="loadmessage")),
 
              # 9.1 user inputs ----
              column(width = 4,
@@ -357,14 +358,14 @@ ui <- navbarPage(
                                      )
                     ),
                     wellPanel(
-                        h4("Accuracy Table -  Best In Class Models"),
+                        h4("Accuracy Table -  Ensembles from Best Global Models"),
                         # DTOutput("accuracy_tbl")
                         reactableOutput("accuracy_tbl")
                         )
                     ),
              # 9.2 result plots ----
              column(width = 8,
-                    h4("Forecast Results - Best Global Model")
+                    h4("Forecast Results - Ensembles from Best Global Models")
                     ,
                     plotlyOutput("forecast_plot",
                                  height   = "800px")
@@ -381,8 +382,14 @@ ui <- navbarPage(
         
         # * OBSERVER ----
         observeEvent(input$sel_dataset, {
+            # ** SETUP ----
+            rv$data <- NULL
+            # rv$sel_vars <- NULL
             
+            # ** DATA WRANGLING ----
             rv$current_selection <- input$sel_dataset
+            # rv$sel_vars <- input$sel_vars_load
+            
             rv$data              <-
                 datasets_tbl %>% select_dataset(choice = rv$current_selection)
             rv$data_long <- rv$data %>%
@@ -392,6 +399,7 @@ ui <- navbarPage(
                 datasets_tbl %>% get_dataset_description(choice = rv$current_selection)
             rv$data_colnames     <- colnames(rv$data)
             rv$time_series_count <- length(rv$data_colnames)-1
+            
             
             # Summary information
             rv$ts_summary_tbl <- rv$data %>%
@@ -421,7 +429,8 @@ ui <- navbarPage(
                 session = session,
                 inputId = "sel_vars_load",
                 choices = rv$value_name,
-                selected = rv$value_name[1:min(c(6, length(rv$value_name)))]
+                selected = rv$value_name[1:length(rv$value_name)]
+                # selected = rv$value_name[1:min(c(6, length(rv$value_name)))]
             ) 
             
             # INITIALIZE FORECAST TBLS
@@ -456,7 +465,7 @@ ui <- navbarPage(
                 req(rv$data)
                 
                 rv$data %>% 
-                    select(date, input$sel_vars_load) %>%
+                    # select(date, input$sel_vars_load) %>%
                     plot_raw_data(plot_title = "")
             })
 
@@ -464,13 +473,13 @@ ui <- navbarPage(
         output$raw_data_tbl <-
             renderDT(
                 rv$data %>% 
-                    select(date, input$sel_vars_load) %>%
+                    # select(date, input$sel_vars_load) %>%
                     datatable(
-                              # select(input$sel_vars_load),
                           rownames = FALSE,
                           options = list(order = list(list(0, 'desc')))) %>%
                     formatCurrency(
-                        columns  = 2:length(c(date, input$sel_vars_load)),
+                        # columns  = 2:length(c(date, input$sel_vars_load)),
+                        columns  = 2:length(colnames(data)),
                         mark     = ",",
                         dec.mark = ".",
                         currency = ""
@@ -479,14 +488,16 @@ ui <- navbarPage(
         
         # 1.4 seasonality plots ----
         output$seasonality_plots <- renderUI({
-            req(input$sel_vars_load)
+            req(rv$data)
             
             # First Tab Panel
             tab_panel_1 <- tabPanel(
-                title = input$sel_vars_load[1],
+                # title = input$sel_vars_load[1],
+                title = colnames(rv$data)[2],
                 rv$data %>%
                     pivot_longer(cols = -date, names_to = "id") %>% 
-                    filter(id == input$sel_vars_load[1])  %>%
+                    # filter(id == input$sel_vars_load[1]) %>%
+                    filter(id == colnames(rv$data)[2]) %>%
                     group_by(id) %>%
                     plot_seasonal_diagnostics(.date_var    = date,
                                               .value       = value,
@@ -496,11 +507,13 @@ ui <- navbarPage(
             )
             
             # Seasonality remaining Tab Panels
-            seasonality_tab_panels <- NULL
+            # seasonality_tab_panels <- NULL
             
-            if(length(input$sel_vars_load[2:length(input$sel_vars_load)])>0) {
+            # if(length(input$sel_vars_load[2:length(input$sel_vars_load)])>0) {
+            if(length(colnames(rv$data))>2) {
                 seasonality_tab_panels <- 
-                    input$sel_vars_load[2:length(input$sel_vars_load)] %>%
+                    # input$sel_vars_load[2:length(input$sel_vars_load)] %>%
+                    colnames(rv$data)[3:length(colnames(rv$data))] %>% 
                     map(.f = function(x) {
                         tabPanel(
                             title = x,
@@ -532,7 +545,7 @@ ui <- navbarPage(
         output$anomoly_plot <-
             renderPlotly(rv$data %>%
                              pivot_longer(cols = -date, names_to = "id") %>%
-                             filter(id %in% input$sel_vars_load)  %>%
+                             # filter(id %in% input$sel_vars_load)  %>%
                              group_by(id) %>%
                              plot_anomaly_diagnostics(.date_var   = date,
                                                       .value      = value,
@@ -545,23 +558,27 @@ ui <- navbarPage(
 
             # First Tab Panel
             tab_panel_1 <- tabPanel(
-                title = input$sel_vars_load[1],
+                # title = input$sel_vars_load[1],
+                title = colnames(rv$data)[2],
                 rv$data %>%
                     pivot_longer(cols = -date, names_to = "id") %>%
-                    filter(id == input$sel_vars_load[1])  %>%
+                    # filter(id == input$sel_vars_load[1]) %>%
+                    filter(id == colnames(rv$data)[2]) %>%
                     group_by(id) %>%
                     plot_acf_diagnostics(.date_var    = date,
-                                              .value       = value,
-                                              .interactive = FALSE) %>%
+                                         .value       = value,
+                                         .interactive = FALSE) %>%
                     ggplotly(height = 600)
             )
 
             # Autocorrelation remaining Tab Panels
             seasonality_tab_panels <- NULL
 
-            if(length(input$sel_vars_load[2:length(input$sel_vars_load)])>0) {
+            # if(length(input$sel_vars_load[2:length(input$sel_vars_load)])>0) {
+            if(length(colnames(rv$data))>2) {
                 acf_tab_panels <-
-                    input$sel_vars_load[2:length(input$sel_vars_load)] %>%
+                    # input$sel_vars_load[2:length(input$sel_vars_load)] %>%
+                    colnames(rv$data)[3:length(colnames(rv$data))] %>%
                     map(.f = function(x) {
                         tabPanel(
                             title = x,
@@ -596,6 +613,16 @@ ui <- navbarPage(
 
             # ** SETUP ----
             run_parallel  <- FALSE
+            rv$submodels_accuracy_tbl        <- NULL
+            rv$submodels_calib_tbl           <- NULL
+            rv$mean_ensemble_calib_tbl       <- NULL
+            rv$weighted_ensemble_calib_tbl   <- NULL
+            rv$weighted_2_ensemble_calib_tbl <- NULL
+            rv$calibration_tbl               <- NULL
+            rv$accuracy_tbl                  <- NULL
+            rv$bestinclass_models            <- NULL
+            rv$submodels_for_ensemble        <- NULL
+            rv$future_forecast_tbl           <- NULL
 
             # ** TRANSFORMATIONS (+ INVERSIONS) ----
             # * log transformer ----
@@ -609,14 +636,6 @@ ui <- navbarPage(
             } else {
                 function(x) {x}
                 }
-
-            # * outlier cleaning ----
-            # outlier cleaning, no inversion needed
-            clean_fun <- if(input$sel_cleaning) {
-                ts_clean_vec
-            } else {
-                function(x) {x}
-                }    
 
             # * forecast horizon ----
             rv$horizon <- input$horizon
@@ -647,7 +666,7 @@ ui <- navbarPage(
                 ungroup() %>%
 
                 # Lags & Rolling Features / Fourier
-                mutate(id = as_factor(id)) %>%
+                mutate(id = as.factor(id)) %>%
                 group_by(id) %>%
                 group_split() %>%
                 map(.f = function(df) {
@@ -699,7 +718,9 @@ ui <- navbarPage(
             # * cleaned training data ----
             rv$train_cleaned <- training(rv$splits) %>%
                 group_by(id) %>%
-                mutate(value = clean_fun(value, period = rv$ts_frequency)) %>%
+                mutate(value = ifelse(input$sel_cleaning,
+                                      ts_clean_vec(value, period = rv$ts_frequency),
+                                      value)) %>%
                 ungroup()
 
             # ** RECIPES ----
@@ -1432,8 +1453,9 @@ ui <- navbarPage(
                     wflw_spec_knn_housing,
                     wflw_spec_knn_pumpprices,
                     wflw_spec_knn_stocks,
-                    wflw_spec_mars_airpassengers,
-                    wflw_spec_mars_housing,
+                    # excluded MARS because of severe overfitting on airpassenger data
+                    # wflw_spec_mars_airpassengers,
+                    # wflw_spec_mars_housing,
                     wflw_spec_prophet_boost_airpassengers,
                     wflw_spec_prophet_boost_housing,
                     wflw_spec_prophet_boost_pumpprices,
@@ -1511,15 +1533,20 @@ ui <- navbarPage(
                 summarise(.model_id = min(.model_id)) %>% 
                 ungroup() %>%
                 left_join(rv$submodels_accuracy_tbl) %>% 
-                pull(.model_id)
+                pull(.model_id) %>% 
+                unique()
+            
+            print(rv$bestinclass_models)
             
             rv$submodels_for_ensemble <- rv$submodels_accuracy_tbl %>% 
                 filter(.model_id %in% rv$bestinclass_models) %>% 
                 filter(rmse < 1.5*mean(rmse)) %>% # remove extreme values
-                filter(rmse < mean(rmse)) %>%
-                # filter(rmse < 0.9*mean(rv$submodels_accuracy_tbl$rmse)) %>% 
-                # filter(rmse < 1.3*min(rv$submodels_accuracy_tbl$rmse)) %>%
-                pull(.model_id)
+                # filter(rmse < mean(rmse)) %>%
+                filter(rmse < median(rmse)) %>%
+                pull(.model_id) %>% 
+                unique()
+            
+            print(rv$submodels_for_ensemble)
             
             rv$submodels_calib_tbl <- rv$submodels_calib_tbl %>% 
                 filter(.model_id %in% rv$bestinclass_models)
@@ -1598,13 +1625,16 @@ ui <- navbarPage(
 
             print(rv$ensemble_accuracy_tbl)
             
+            # unload from memory
+            rv$submodels_accuracy_tbl <- NULL
+            rv$submodels_calib_tbl <- NULL
 
             # final calibration
             rv$calibration_tbl <-
-                combine_modeltime_tables(rv$submodels_calib_tbl %>% filter(.model_id %in% rv$submodels_for_ensemble), 
-                                         rv$mean_ensemble_calib_tbl,
-                                         rv$weighted_ensemble_calib_tbl,
-                                         rv$weighted_2_ensemble_calib_tbl) %>%
+                combine_modeltime_tables(
+                    rv$mean_ensemble_calib_tbl,
+                    rv$weighted_ensemble_calib_tbl,
+                    rv$weighted_2_ensemble_calib_tbl) %>%
                 modeltime_calibrate(testing(rv$splits), id = "id")
             rv$accuracy_tbl <- rv$calibration_tbl %>%
                 mutate(.calibration_data = map(.calibration_data, .f = function(tbl) {
@@ -1617,7 +1647,12 @@ ui <- navbarPage(
                 })) %>%
                 modeltime_accuracy(acc_by_id = TRUE) %>%
                 select(id, .model_id, .model_desc, mae, rmse, rsq) %>%
-                arrange(rmse)
+                arrange(id, rmse)
+            
+            # unload from memory
+            rv$mean_ensemble_calib_tbl       <- NULL
+            rv$weighted_ensemble_calib_tbl   <- NULL
+            rv$weighted_2_ensemble_calib_tbl <- NULL
 
             rv$best_model <- rv$accuracy_tbl %>% 
                 filter(grepl(pattern = "ENSEMBLE", x = .model_desc)) %>% 
@@ -1630,6 +1665,8 @@ ui <- navbarPage(
             rv$refit_tbl <- rv$calibration_tbl %>%
                 # filter(.model_id == rv$best_model) %>%
                 modeltime_refit(rv$data_prepared_tbl)
+            
+            rv$calibration_tbl <- NULL
 
             rv$future_forecast_tbl <- rv$refit_tbl %>%
                 modeltime_forecast(
@@ -1640,10 +1677,11 @@ ui <- navbarPage(
                 mutate(
                     across(.cols = c(.value, .conf_lo, .conf_hi),
                            .fns  = function(x) trans_fun_inv(x)
-                           # .fns  = function(x) scale_fun_inv(trans_fun_inv(x))
                            )
                 ) %>%
-                group_by(id)
+                group_by(id) %>% 
+                arrange(id)
+                
 
             message("\nDone!")
 
@@ -1669,7 +1707,7 @@ ui <- navbarPage(
                     label   = "Enter a Forecast Horizon",
                     icon    = icon("chart-line")
                     ),
-                p(str_glue("We recommend forecasting {rv$horizon_recommended} periods.")),
+                p(str_glue("We recommend forecasting {rv$horizon_recommended} {rv$ts_scale}s.")),
                 br(),
                 strong("Transformation & Cleaning"),
                 materialSwitch(
@@ -1688,30 +1726,21 @@ ui <- navbarPage(
                 )
         })
         
-        output$accuracy_tbl <- 
-            # renderDT({
-            #     req(rv$accuracy_tbl)
-            #     datatable(rv$accuracy_tbl %>%
-            #                   # left_join(rv$loadings_tbl %>% select(-.model_id)) %>%
-            #                   select(id, .model_id, .model_desc, mae, rmse, rsq) %>% 
-            #                   group_by(id) %>% 
-            #                   arrange(id, rmse),
-            #               rownames = FALSE,
-            #               options  = list(dom = 't')
-            #               ) %>%
-            #         formatRound(columns = 4:6,
-            #                     digits  = 2)
-            # })
+        output$accuracy_tbl <-
             renderReactable({
                 req(rv$accuracy_tbl)
                 
                 rv$accuracy_tbl %>%
-                    group_by(id) %>%
-                    # select(id, .model_id, .model_desc, mae, rmse, rsq) %>%
-                    table_modeltime_accuracy(
-                          # rownames = FALSE,
-                          # options  = list(dom = 't')
-                )
+                    # filter(id %in% input$sel_vars_load) %>%
+                    arrange(id, rmse) %>%
+                    group_by(id) %>% 
+                    table_modeltime_accuracy(.expand_groups = FALSE,
+                                             .searchable    = FALSE, 
+                                             defaultSorted = list(id = "asc"),
+                                             columns = list(
+                                                 .model_desc = colDef(show = FALSE)
+                                                 )
+                                             )
             })
 
         # 9.2 forecast plot ----
@@ -1719,7 +1748,7 @@ ui <- navbarPage(
             req(rv$future_forecast_tbl)
 
             rv$future_forecast_tbl %>%
-                filter(id %in% input$sel_vars_load) %>% 
+                # filter(id %in% input$sel_vars_load) %>% 
                 plot_modeltime_forecast(.facet_ncol = 2,
                                         # .color_var = .model_id,
                                         .conf_interval_show = FALSE)
